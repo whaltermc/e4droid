@@ -37,8 +37,19 @@ jobs:
             tag="v${version}"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          # Topmost section of CHANGELOG.md (same logic as getLatestChangelog in build.gradle)
-          awk '/^## /{if (seen) exit; seen=1} seen' CHANGELOG.md > release-notes.md
+          # Supported-version table + topmost section of CHANGELOG.md
+          # (changelog logic mirrors getLatestChangelog in build.gradle)
+          {
+            printf '### Supported Minecraft versions\n\n'
+            printf '| File | Minecraft | Loader |\n'
+            printf '|------|-----------|--------|\n'
+            printf '| `e4droid-fabric-%s.jar` | 1.18 - 1.21.x | Fabric / Quilt |\n' "$version"
+            printf '| `e4droid-fabric-%s-modern.jar` | 26.1+ | Fabric |\n' "$version"
+            printf '| `e4droid-forge-%s.jar` | 1.18 - 1.21 | Forge |\n' "$version"
+            printf '| `e4droid-neoforge-%s.jar` | 1.18+ | NeoForge |\n' "$version"
+            printf -- '---\n\n'
+            awk '/^## /{if (seen) exit; seen=1} seen' CHANGELOG.md
+          } > release-notes.md
           echo "--- release notes ---"
           cat release-notes.md
 
@@ -56,6 +67,11 @@ jobs:
                  | grep -v -E -- '-sources|-dev-shadow|-dev\.|-modern|-unstubbed' | head -n1)"
             cp "$src" "dist/e4droid-$platform-$version.jar"
           done
+          # Modern Fabric jar (Minecraft 26.1+)
+          modern="$(ls fabric/build/libs/e4mc-fabric-"$version"-modern.jar 2>/dev/null || true)"
+          if [[ -n "$modern" ]]; then
+            cp "$modern" "dist/e4droid-fabric-"$version"-modern.jar"
+          fi
           # Sources jars (nice to have)
           for platform in fabric forge neoforge; do
             src="$(ls "$platform"/build/libs/e4mc-"$platform"-"$version"-sources.jar 2>/dev/null || true)"

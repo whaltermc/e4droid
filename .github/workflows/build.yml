@@ -47,6 +47,11 @@ jobs:
                  | grep -v -E -- '-sources|-dev-shadow|-dev\.|-modern|-unstubbed' | head -n1)"
             cp "$src" "dist/e4droid-$platform-$version.jar"
           done
+          # Modern Fabric jar (Minecraft 26.1+)
+          modern="$(ls fabric/build/libs/e4mc-fabric-"$version"-modern.jar 2>/dev/null || true)"
+          if [[ -n "$modern" ]]; then
+            cp "$modern" "dist/e4droid-fabric-"$version"-modern.jar"
+          fi
           ls -l dist
 
       - name: Upload artifacts
