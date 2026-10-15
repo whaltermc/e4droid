@@ -1,0 +1,41 @@
+diff --git a/common/src/main/java/link/e4mc/QuiclimeSession.java b/common/src/main/java/link/e4mc/QuiclimeSession.java
+index 1880c6f..481c9e3 100644
+--- a/common/src/main/java/link/e4mc/QuiclimeSession.java
++++ b/common/src/main/java/link/e4mc/QuiclimeSession.java
+@@ -2,6 +2,8 @@ package link.e4mc;
+ 
+ import com.google.gson.Gson;
+ import com.google.gson.JsonObject;
++import dev.whaltermc.e4droid.AndroidCompat;
++import dev.whaltermc.e4droid.AndroidNatives;
+ import io.netty.bootstrap.Bootstrap;
+ import io.netty.bootstrap.ServerBootstrap;
+ import io.netty.buffer.ByteBuf;
+@@ -221,6 +223,15 @@ public class QuiclimeSession {
+ 
+     public void start() {
+         try {
++            // e4droid: load Android (bionic) natives before the QUIC codec initializes
++            AndroidNatives.load();
++            if (AndroidCompat.isAndroid() && !AndroidNatives.isQuicheAvailable()) {
++                throw new UnsupportedOperationException(
++                        "e4droid: QUIClime needs an Android build of netty-quiche; place libnetty_quiche.so in "
++                                + "e4droid-natives/" + AndroidCompat.abi()
++                                + " next to the mod jar (see dev.whaltermc.e4droid/README.md)",
++                        AndroidNatives.quicheError());
++            }
+             var relayInfo = getRelay();
+             LOGGER.info("using relay {}", relayInfo.id);
+             QuicSslContext context = QuicSslContextBuilder
+@@ -238,7 +249,10 @@ public class QuiclimeSession {
+                     .initialMaxStreamDataUnidirectional(1250000)
+                     .build();
+             Class<? extends DatagramChannel> channelClass = null;
+-            if (group instanceof EpollEventLoopGroup) {
++            if (AndroidCompat.isAndroid()) {
++                // e4droid: PojavLauncher has no epoll/kqueue natives; always use NIO
++                channelClass = NioDatagramChannel.class;
++            } else if (group instanceof EpollEventLoopGroup) {
+                 channelClass = EpollDatagramChannel.class;
+             } else if (group instanceof NioEventLoopGroup) {
+                 channelClass = NioDatagramChannel.class;

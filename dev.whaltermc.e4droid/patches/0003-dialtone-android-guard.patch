@@ -1,0 +1,30 @@
+diff --git a/common/src/main/java/link/e4mc/dialtone/DialtoneAmbientSession.java b/common/src/main/java/link/e4mc/dialtone/DialtoneAmbientSession.java
+index d39f8d1..929ad1e 100644
+--- a/common/src/main/java/link/e4mc/dialtone/DialtoneAmbientSession.java
++++ b/common/src/main/java/link/e4mc/dialtone/DialtoneAmbientSession.java
+@@ -2,6 +2,8 @@ package link.e4mc.dialtone;
+ 
+ import io.netty.channel.DefaultEventLoopGroup;
+ import io.netty.channel.EventLoopGroup;
++import dev.whaltermc.e4droid.AndroidCompat;
++import dev.whaltermc.e4droid.AndroidNatives;
+ import link.e4mc.E4mcClient;
+ import link.e4mc.QuiclimeSession;
+ import link.e4mc.iroh.Endpoint;
+@@ -20,6 +22,16 @@ public class DialtoneAmbientSession {
+ 
+     public void start() throws Exception {
+         E4mcClient.LOGGER.info("Starting DialtoneAmbientSession!");
++        // e4droid: iroh-java only ships glibc natives upstream; without an
++        // Android build Dialtone cannot run on PojavLauncher.
++        AndroidNatives.load();
++        if (AndroidCompat.isAndroid() && !AndroidNatives.isIrohAvailable()) {
++            throw new UnsupportedOperationException(
++                    "e4droid: Dialtone needs an Android build of iroh-java; place libiroh_java.so in "
++                            + "e4droid-natives/" + AndroidCompat.abi()
++                            + " next to the mod jar (see dev.whaltermc.e4droid/README.md)",
++                    AndroidNatives.irohError());
++        }
+         this.endpoint = new Endpoint(new byte[][]{"e4mc-dialtone".getBytes(StandardCharsets.UTF_8)}, QuiclimeSession.getRelayMap());
+         this.dispatcher = new Thread(() -> {
+             while (true) {

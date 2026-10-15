@@ -1,0 +1,4 @@
+# e4droid android patch series
+0001-add-android-compat-and-natives-loader.patch
+0002-quiclime-android-nio-and-native-load.patch
+0003-dialtone-android-guard.patch

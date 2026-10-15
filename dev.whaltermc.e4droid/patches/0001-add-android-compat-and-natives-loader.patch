@@ -1,0 +1,180 @@
+diff --git a/common/src/main/java/dev/whaltermc/e4droid/AndroidCompat.java b/common/src/main/java/dev/whaltermc/e4droid/AndroidCompat.java
+new file mode 100644
+index 0000000..1457062
+--- /dev/null
++++ b/common/src/main/java/dev/whaltermc/e4droid/AndroidCompat.java
+@@ -0,0 +1,49 @@
++package dev.whaltermc.e4droid;
++
++/**
++ * Android (PojavLauncher) detection and helpers for e4droid.
++ *
++ * All Android-specific code lives outside the upstream {@code link.e4mc}
++ * namespace, in {@code dev.whaltermc.e4droid}.
++ */
++public final class AndroidCompat {
++    private static final boolean ANDROID = detectAndroid();
++
++    private AndroidCompat() {
++    }
++
++    public static boolean isAndroid() {
++        return ANDROID;
++    }
++
++    /** ABI folder name used when resolving Android natives. */
++    public static String abi() {
++        String arch = System.getProperty("os.arch", "").toLowerCase();
++        return switch (arch) {
++            case "aarch64", "arm64" -> "arm64-v8a";
++            case "arm", "armv7l", "armeabi-v7a" -> "armeabi-v7a";
++            case "x86_64", "amd64" -> "x86_64";
++            case "x86", "i386", "i486", "i586", "i686" -> "x86";
++            default -> arch;
++        };
++    }
++
++    private static boolean detectAndroid() {
++        if (System.getProperty("e4droid.forceAndroid") != null) {
++            return true;
++        }
++        if (System.getProperty("android.runtime") != null
++                || System.getProperty("android.vm.name") != null
++                || System.getProperty("java.runtime.name", "").toLowerCase().contains("android")) {
++            return true;
++        }
++        try {
++            Class.forName("android.os.Build");
++            return true;
++        } catch (ClassNotFoundException ignored) {
++        }
++        String vendor = System.getProperty("java.vendor", "").toLowerCase();
++        String osName = System.getProperty("os.name", "").toLowerCase();
++        return vendor.contains("android") || osName.contains("android");
++    }
++}
+diff --git a/common/src/main/java/dev/whaltermc/e4droid/AndroidNatives.java b/common/src/main/java/dev/whaltermc/e4droid/AndroidNatives.java
+new file mode 100644
+index 0000000..7f65a76
+--- /dev/null
++++ b/common/src/main/java/dev/whaltermc/e4droid/AndroidNatives.java
+@@ -0,0 +1,119 @@
++package dev.whaltermc.e4droid;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.util.List;
++
++/**
++ * Pre-loads Android (bionic) builds of the native libraries e4mc needs.
++ *
++ * Upstream e4mc uses glibc-linked Linux natives (quiche for QUIClime, iroh for
++ * Dialtone); those cannot be dlopen()ed by PojavLauncher's bionic-based JVM.
++ * e4droid expects bionic builds to be provided out of band, e.g.:
++ *
++ *   mods/e4droid-natives/&lt;abi&gt;/libnetty_quiche.so
++ *   mods/e4droid-natives/&lt;abi&gt;/libiroh_java.so
++ *
++ * or pointed at with -De4droid.nativesDir=/path/to/natives/&lt;abi&gt;.
++ *
++ * Load order matters: netty-incubator-codec-quic and iroh-java load their own
++ * natives lazily, so e4droid loads the Android builds first; the JVM dedupes
++ * by inode when the upstream loaders run afterwards.
++ */
++public final class AndroidNatives {
++    private static final Logger LOGGER = LoggerFactory.getLogger("e4droid");
++
++    private static boolean loaded;
++    private static boolean quicheAvailable;
++    private static boolean irohAvailable;
++    private static Throwable quicheError;
++    private static Throwable irohError;
++
++    private AndroidNatives() {
++    }
++
++    /** Idempotent; does nothing off Android. */
++    public static synchronized void load() {
++        if (loaded || !AndroidCompat.isAndroid()) {
++            return;
++        }
++        loaded = true;
++        Path dir = nativesDir();
++        LOGGER.info("e4droid: Android detected (abi {}), natives dir: {}", AndroidCompat.abi(), dir);
++        quicheAvailable = tryLoad(dir, List.of(
++                "libnetty_quiche.so",
++                "libnetty_quiche_android.so",
++                "libquiche.so"
++        ), true);
++        irohAvailable = tryLoad(dir, List.of(
++                "libiroh_java.so",
++                "libiroh.so"
++        ), false);
++    }
++
++    public static boolean isQuicheAvailable() {
++        return quicheAvailable || !AndroidCompat.isAndroid();
++    }
++
++    public static boolean isIrohAvailable() {
++        return irohAvailable || !AndroidCompat.isAndroid();
++    }
++
++    public static Throwable quicheError() {
++        return quicheError;
++    }
++
++    public static Throwable irohError() {
++        return irohError;
++    }
++
++    private static Path nativesDir() {
++        String override = System.getProperty("e4droid.nativesDir");
++        if (override != null) {
++            return Paths.get(override);
++        }
++        // Best effort: next to the mod jar, inside the mods folder.
++        Path jar = null;
++        try {
++            jar = link.e4mc.Agnos.jarPath();
++        } catch (Throwable ignored) {
++        }
++        if (jar != null) {
++            Path parent = jar.getParent();
++            if (parent != null) {
++                return parent.resolve("e4droid-natives").resolve(AndroidCompat.abi());
++            }
++        }
++        return Paths.get("e4droid-natives", AndroidCompat.abi());
++    }
++
++    private static boolean tryLoad(Path dir, List<String> names, boolean quiche) {
++        for (String name : names) {
++            Path candidate = dir.resolve(name);
++            if (!Files.isRegularFile(candidate)) {
++                continue;
++            }
++            try {
++                System.load(candidate.toAbsolutePath().toString());
++                LOGGER.info("e4droid: loaded Android native {}", candidate);
++                return true;
++            } catch (Throwable t) {
++                if (quiche) {
++                    quicheError = t;
++                } else {
++                    irohError = t;
++                }
++                LOGGER.warn("e4droid: failed to load Android native {}", candidate, t);
++            }
++        }
++        LOGGER.warn(
++                "e4droid: no Android native found for {} in {} (looked for {})",
++                quiche ? "quiche" : "iroh", dir, names
++        );
++        return false;
++    }
++}
