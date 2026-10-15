@@ -3,19 +3,23 @@ name: build
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      mc: ${{ steps.meta.outputs.mc }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -29,9 +33,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Read mod version
+      - name: Read versions
         id: meta
-        run: echo "version=$(grep -m1 '^mod_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          echo "version=$(grep -m1 '^mod_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "mc=$(grep -m1 '^minecraft_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: ./gradlew build :fabric:modernRemapJar --no-daemon -PcurseforgeApiToken= -PmodrinthApiToken=
@@ -40,18 +47,13 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
+          mc="${{ steps.meta.outputs.mc }}"
+          modern_mc="26.1"
           mkdir -p dist
           for platform in fabric forge neoforge; do
-            src="$(ls "$platform"/build/libs/e4mc-"$platform"-"$version".jar 2>/dev/null \
-              || ls "$platform"/build/libs/e4mc-"$platform"-*.jar \
-                 | grep -v -E -- '-sources|-dev-shadow|-dev\.|-modern|-unstubbed' | head -n1)"
-            cp "$src" "dist/e4droid-$platform-$version.jar"
+            cp "$platform/build/libs/e4mc-$platform-$version.jar" "dist/e4droid-$platform-$mc.jar"
           done
-          # Modern Fabric jar (Minecraft 26.1+)
-          modern="$(ls fabric/build/libs/e4mc-fabric-"$version"-modern.jar 2>/dev/null || true)"
-          if [[ -n "$modern" ]]; then
-            cp "$modern" "dist/e4droid-fabric-"$version"-modern.jar"
-          fi
+          cp "fabric/build/libs/e4mc-fabric-$version-modern.jar" "dist/e4droid-fabric-$modern_mc.jar"
           ls -l dist
 
       - name: Upload artifacts
@@ -61,3 +63,64 @@ jobs:
           path: dist/*.jar
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/rererewrite' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download jars
+        uses: actions/download-artifact@v7
+        with:
+          name: e4droid-jars
+          path: dist
+
+      - name: Determine release target and notes
+        id: rel
+        run: |
+          set -euo pipefail
+          mc="${{ needs.build.outputs.mc }}"
+          modern_mc="26.1"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            title="$tag"
+          else
+            tag="latest"
+            title="Latest build (Minecraft $mc)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          {
+            printf '### Supported Minecraft versions\n\n'
+            printf '| File | Minecraft | Loader |\n'
+            printf '|------|-----------|--------|\n'
+            printf '| `e4droid-fabric-%s.jar` | 1.18 - 1.21.x | Fabric / Quilt |\n' "$mc"
+            printf '| `e4droid-fabric-%s.jar` | %s+ | Fabric |\n' "$modern_mc" "$modern_mc"
+            printf '| `e4droid-forge-%s.jar` | 1.18 - 1.21 | Forge |\n' "$mc"
+            printf '| `e4droid-neoforge-%s.jar` | 1.18+ | NeoForge |\n' "$mc"
+            printf -- '---\n\n'
+            awk '/^## /{if (seen) exit; seen=1} seen' CHANGELOG.md
+          } > release-notes.md
+          echo "--- notes ---"; cat release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.rel.outputs.tag }}"
+          title="${{ steps.rel.outputs.title }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.jar --clobber
+            gh release edit "$tag" --title "$title" --notes-file release-notes.md
+          else
+            gh release create "$tag" dist/*.jar \
+              --title "$title" \
+              --notes-file release-notes.md \
+              --target "$GITHUB_SHA"
+          fi
