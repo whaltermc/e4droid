@@ -1,0 +1,58 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Read mod version
+        id: meta
+        run: echo "version=$(grep -m1 '^mod_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: ./gradlew build :fabric:modernRemapJar --no-daemon -PcurseforgeApiToken= -PmodrinthApiToken=
+
+      - name: Collect e4droid assets
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          mkdir -p dist
+          for platform in fabric forge neoforge; do
+            src="$(ls "$platform"/build/libs/e4mc-"$platform"-"$version".jar 2>/dev/null \
+              || ls "$platform"/build/libs/e4mc-"$platform"-*.jar \
+                 | grep -v -E -- '-sources|-dev-shadow|-dev\.|-modern|-unstubbed' | head -n1)"
+            cp "$src" "dist/e4droid-$platform-$version.jar"
+          done
+          ls -l dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: e4droid-jars
+          path: dist/*.jar
+          if-no-files-found: error
+          retention-days: 14
